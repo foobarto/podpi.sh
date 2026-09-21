@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck --version
+      - run: shellcheck podpi.sh
+
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-22.04, macos-latest, macos-13]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tool inventory
+        run: |
+          echo "default bash : $(bash --version | head -1)"
+          echo "/bin/bash    : $(/bin/bash --version | head -1)"
+          echo "sha256sum    : $(command -v sha256sum || echo absent)"
+          echo "shasum       : $(command -v shasum   || echo absent)"
+          echo "openssl      : $(openssl version || true)"
+          echo "openssl ts   : $(openssl ts -help >/dev/null 2>&1 && echo present || echo ABSENT)"
+
+      - name: Syntax check
+        run: bash -n podpi.sh
+
+      # The default interpreter: Bash 5 on Linux, Bash 3.2 on macOS runners.
+      - name: Self-test
+        run: ./podpi.sh --self-test
+
+      # macOS ships Bash 3.2 as /bin/bash. Running the suite through it
+      # explicitly is the guard against creeping Bash 4+ syntax.
+      - name: Self-test under /bin/bash
+        run: /bin/bash podpi.sh --self-test
+
+      # macOS /usr/bin/openssl is LibreSSL and has no `ts` command, so the
+      # step above exercises the graceful-skip path. Homebrew's OpenSSL then
+      # exercises the real RFC 3161 path against the locally generated TSA.
+      - name: Self-test with Homebrew OpenSSL (RFC 3161 path)
+        if: runner.os == 'macOS'
+        run: |
+          brew install openssl@3 >/dev/null
+          export PODPI_OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
+          "$PODPI_OPENSSL" version
+          /bin/bash podpi.sh --self-test
+
+      # The manifest must be byte-identical everywhere. ASCII-only filenames
+      # are used deliberately: HFS+/APFS vs ext4 Unicode normalization can
+      # legitimately differ, and that is documented, not something to assert.
+      - name: Cross-platform determinism
+        run: |
+          set -eu
+          EXPECTED=217e3052fdc5d34730e73a7e32986e76ed8ad7eb723bbf54ab3ae4fe8e95afe8
+          rm -rf /tmp/fx && mkdir -p /tmp/fx/fixture/nested
+          printf 'alpha\n' > /tmp/fx/fixture/a.txt
+          printf 'bravo\n' > '/tmp/fx/fixture/b c.txt'
+          printf 'delta\n' > /tmp/fx/fixture/nested/d.bin
+          ./podpi.sh --output /tmp/fx/pkg /tmp/fx/fixture >/dev/null
+          cat /tmp/fx/pkg/manifest.txt
+          GOT=$(cut -d' ' -f1 < /tmp/fx/pkg/manifest.txt.sha256)
+          echo "expected $EXPECTED"
+          echo "observed $GOT"
+          test "$GOT" = "$EXPECTED"
+
+      # The evidence tree must come back bit-for-bit unchanged.
+      - name: Source tree is untouched
+        run: |
+          set -eu
+          rm -rf /tmp/ro && mkdir -p /tmp/ro/ev/nested
+          printf 'one\n'  > /tmp/ro/ev/a.txt
+          printf 'two\n'  > '/tmp/ro/ev/b c.txt'
+          printf 'three\n'> /tmp/ro/ev/nested/d.bin
+          ./podpi.sh --output /tmp/ro/before /tmp/ro/ev >/dev/null
+          ./podpi.sh --output /tmp/ro/after  /tmp/ro/ev >/dev/null
+          cmp /tmp/ro/before/manifest.txt /tmp/ro/after/manifest.txt
+          echo "source tree unchanged across two acquisitions"
+
+      - name: Verification catches tampering
+        run: |
+          set -eu
+          printf 'MODIFIED\n' > /tmp/ro/ev/a.txt
+          if ./podpi.sh --verify /tmp/ro/before --source /tmp/ro/ev; then
+            echo "FAIL: tampering was not detected"; exit 1
+          fi
+          echo "tampering correctly reported as FAIL"

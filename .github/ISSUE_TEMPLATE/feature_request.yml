@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest a change
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `podpi.sh` is intentionally one small, auditable file that does four things:
+        hash, manifest, attest, verify — plus opt-in timestamping.
+
+        Out of scope by design: config file formats, plugins, alternative hash
+        algorithms, archive extraction, content parsing (PDF/EXIF/email), a bundled
+        PDF engine, signature-service automation, a daemon, a GUI, or a rewrite in
+        another language. See CONTRIBUTING.md.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation, not the solution you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What did you try instead?
+      description: Existing flags, a wrapper script, a different tool.
+
+  - type: checkboxes
+    id: invariants
+    attributes:
+      label: Compatibility with the project's invariants
+      description: Tick the ones your proposal preserves.
+      options:
+        - label: Keeps the source tree strictly read-only
+        - label: Keeps manifest.txt deterministic (no time/host/user/absolute path)
+        - label: Adds no network access outside an explicit --timestamp
+        - label: Automates no electronic-signature service
+        - label: Stays Bash 3.2 compatible and ShellCheck-clean

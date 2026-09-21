@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # podpi.sh has no dependencies by design; only the CI actions need updating.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "ci"

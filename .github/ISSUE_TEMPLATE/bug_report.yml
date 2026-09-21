@@ -1,0 +1,81 @@
+name: Bug report
+description: Something behaves incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not attach real evidence files.** Reproduce with synthetic data.
+
+        If the issue has security impact (a wrong digest, a false `PASS`, quoting
+        escape, unexpected network access), please report it privately instead:
+        https://github.com/foobarto/podpi.sh/security/advisories/new
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you get instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: The smallest set of commands that shows the problem.
+      render: shell
+      placeholder: |
+        mkdir -p /tmp/ev && printf 'x\n' > /tmp/ev/a.txt
+        ./podpi.sh --output /tmp/pkg /tmp/ev
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Exact output, including the error. Redact any real paths.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: podpi.sh version or commit
+    validations:
+      required: true
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: "Output of: `uname -sr; bash --version | head -1; openssl version`"
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part?
+      options:
+        - Acquisition (hashing / manifest)
+        - Verification
+        - Attestation or HTML output
+        - Timestamping (RFC 3161)
+        - Portability (macOS / Bash 3.2)
+        - Something else
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I ran `./podpi.sh --self-test` and included the result if it failed
+          required: true
+        - label: I have not attached real evidence files
+          required: true

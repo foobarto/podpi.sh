@@ -1,0 +1,25 @@
+# Preservation packages produced by podpi.sh.
+# These contain records of your own evidence -- never commit them by accident.
+podpi-*/
+
+# Timestamp artefacts and digest sidecars written next to arbitrary files.
+*.tsq
+*.tsr
+*.sha256
+
+# Attestations and rendered output.
+attestation.pdf
+attestation.html
+
+# Scratch space.
+.tmp/
+*.bak
+*.orig
+*.rej
+
+# Editors and OS noise.
+*~
+.*.swp
+.vscode/
+.idea/
+.DS_Store
