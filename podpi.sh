@@ -1374,6 +1374,77 @@ do_hash_file() {
 # Mode: self-test  (no network; the TSA below is generated locally)
 # ==========================================================================
 
+# build_test_tsa DIR -> 0 when a throwaway RFC 3161 authority was created in
+# DIR, non-zero with TSA_SKIP_REASON explaining why.
+#
+# Every OpenSSL call here is guarded on purpose. OpenSSL builds differ wildly
+# (LibreSSL ships no `ts` at all; some builds lack `req -addext`), and under
+# `set -e` a single unguarded failure would abort the entire self-test with no
+# output whatsoever. Failing to BUILD the fixture is not a podpi.sh defect, so
+# it degrades to a visible skip rather than a silent death.
+TSA_SKIP_REASON=""
+
+build_test_tsa() {
+    local t="$1"
+    TSA_SKIP_REASON=""
+
+    command -v "$OPENSSL_BIN" >/dev/null 2>&1 || {
+        TSA_SKIP_REASON="no openssl on PATH"; return 1; }
+    "$OPENSSL_BIN" ts -help >/dev/null 2>&1 || {
+        TSA_SKIP_REASON="this openssl has no 'ts' command"; return 1; }
+
+    mkdir -p "$t" || { TSA_SKIP_REASON="cannot create $t"; return 1; }
+
+    # Paths are interpolated directly, which avoids a sed -i round trip and
+    # with it the GNU/BSD difference in how -i takes its suffix.
+    cat > "$t/tsa.cnf" <<EOF
+[ tsa_cfg ]
+serial            = $t/serial
+crypto_device     = builtin
+signer_cert       = $t/tsa.crt
+certs             = $t/tsa.crt
+signer_key        = $t/tsa.key
+signer_digest     = sha256
+default_policy    = 1.2.3.4.1
+digests           = sha256,sha512
+accuracy          = secs:1
+ordering          = yes
+tsa_name          = yes
+ess_cert_id_chain = no
+ess_cert_id_alg   = sha256
+EOF
+    echo 01 > "$t/serial"
+
+    if ! "$OPENSSL_BIN" req -x509 -newkey rsa:2048 -keyout "$t/tsa.key" \
+            -out "$t/tsa.crt" -days 2 -nodes -subj "/CN=podpi local test TSA" \
+            -addext "basicConstraints=critical,CA:FALSE" \
+            -addext "keyUsage=critical,digitalSignature" \
+            -addext "extendedKeyUsage=critical,timeStamping" \
+            > "$t/req.log" 2>&1; then
+        TSA_SKIP_REASON="openssl req failed: $(tail -n 1 < "$t/req.log")"
+        return 1
+    fi
+    return 0
+}
+
+# issue_test_token TSA_DIR DATA_FILE OUT_TSR -> 0 on success, non-zero with
+# TSA_SKIP_REASON set. Guarded for the same reason as build_test_tsa.
+issue_test_token() {
+    local t="$1" data="$2" out="$3"
+
+    if ! "$OPENSSL_BIN" ts -query -data "$data" -sha256 -cert \
+            -out "$out.tsq" > "$t/query.log" 2>&1; then
+        TSA_SKIP_REASON="openssl ts -query failed: $(tail -n 1 < "$t/query.log")"
+        return 1
+    fi
+    if ! "$OPENSSL_BIN" ts -reply -config "$t/tsa.cnf" -section tsa_cfg \
+            -queryfile "$out.tsq" -out "$out" > "$t/reply.log" 2>&1; then
+        TSA_SKIP_REASON="openssl ts -reply failed: $(tail -n 1 < "$t/reply.log")"
+        return 1
+    fi
+    return 0
+}
+
 do_self_test() {
     local self tmp ev pkg fails=0
     self="$(abs_path "${BASH_SOURCE[0]}")"
@@ -1402,8 +1473,11 @@ do_self_test() {
     }
 
     printf '%s\n' "PODPI.sh SELF-TEST"
-    printf 'bash %s / hash=%s / stat=%s\n\n' \
+    printf 'bash %s / hash=%s / stat=%s\n' \
         "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}" "$HASH_KIND" "$STAT_KIND"
+    printf 'openssl %s (%s)\n\n' \
+        "$(command -v "$OPENSSL_BIN" 2>/dev/null || echo absent)" \
+        "$("$OPENSSL_BIN" version 2>/dev/null || echo 'not runnable')"
 
     pkg="$tmp/pkg"
     check "create package"                 0 bash "$self" --output "$pkg" "$ev"
@@ -1449,50 +1523,20 @@ do_self_test() {
     check "refuse re-attesting a package"  1 bash "$self" --attest "$pkg"
 
     # ---- RFC 3161, exercised against a throwaway local TSA, no network ----
-    if command -v "$OPENSSL_BIN" >/dev/null 2>&1 && "$OPENSSL_BIN" ts -help >/dev/null 2>&1; then
-        local t="$tmp/tsa"
-        mkdir -p "$t"
-        cat > "$t/tsa.cnf" <<'EOF'
-[ tsa_cfg ]
-serial            = SERIALFILE
-crypto_device     = builtin
-signer_cert       = CERTFILE
-certs             = CERTFILE
-signer_key        = KEYFILE
-signer_digest     = sha256
-default_policy    = 1.2.3.4.1
-digests           = sha256,sha512
-accuracy          = secs:1
-ordering          = yes
-tsa_name          = yes
-ess_cert_id_chain = no
-ess_cert_id_alg   = sha256
-EOF
-        sed -i.bak -e "s#SERIALFILE#$t/serial#" -e "s#CERTFILE#$t/tsa.crt#" \
-                   -e "s#KEYFILE#$t/tsa.key#" "$t/tsa.cnf"
-        echo 01 > "$t/serial"
-        "$OPENSSL_BIN" req -x509 -newkey rsa:2048 -keyout "$t/tsa.key" -out "$t/tsa.crt" \
-            -days 2 -nodes -subj "/CN=podpi local test TSA" \
-            -addext "basicConstraints=critical,CA:FALSE" \
-            -addext "keyUsage=critical,digitalSignature" \
-            -addext "extendedKeyUsage=critical,timeStamping" >/dev/null 2>&1
+    # The fixture is built through guarded helpers: if this OpenSSL cannot
+    # produce a test authority, that is reported as a skip and the suite
+    # carries on, rather than dying silently under `set -e`.
+    local t="$tmp/tsa"
+    printf 'unrelated\n' > "$tmp/other.dat"
 
-        # A manifest-only package, as --attest expects to find.
-        cp -R "$tmp/pkg2" "$tmp/pkgts"
-        rm -f "$tmp/pkgts/attestation.txt" "$tmp/pkgts/attestation.txt.sha256" \
-              "$tmp/pkgts/summary.txt"
+    # A manifest-only package, which is what --attest expects to find.
+    cp -R "$tmp/pkg2" "$tmp/pkgts"
+    rm -f "$tmp/pkgts/attestation.txt" "$tmp/pkgts/attestation.txt.sha256" \
+          "$tmp/pkgts/summary.txt"
 
-        "$OPENSSL_BIN" ts -query -data "$tmp/pkgts/manifest.txt" -sha256 -cert \
-            -out "$t/good.tsq" >/dev/null 2>&1
-        "$OPENSSL_BIN" ts -reply -config "$t/tsa.cnf" -section tsa_cfg \
-            -queryfile "$t/good.tsq" -out "$t/good.tsr" >/dev/null 2>&1
-
-        # A token over unrelated data, to prove a wrong token is rejected.
-        printf 'unrelated\n' > "$t/other.dat"
-        "$OPENSSL_BIN" ts -query -data "$t/other.dat" -sha256 -cert \
-            -out "$t/bad.tsq" >/dev/null 2>&1
-        "$OPENSSL_BIN" ts -reply -config "$t/tsa.cnf" -section tsa_cfg \
-            -queryfile "$t/bad.tsq" -out "$t/bad.tsr" >/dev/null 2>&1
+    if build_test_tsa "$t" \
+       && issue_test_token "$t" "$tmp/pkgts/manifest.txt" "$t/good.tsr" \
+       && issue_test_token "$t" "$tmp/other.dat" "$t/bad.tsr"; then
 
         check "reject token for other data" 1 bash "$self" --attest "$tmp/pkgts" \
             --timestamp --tsr "$t/bad.tsr"
@@ -1509,7 +1553,8 @@ EOF
         cp "$t/bad.tsr" "$tmp/pkgts/manifest.txt.tsr"
         check "detect swapped token"        1 bash "$self" --verify "$tmp/pkgts" --source "$ev"
     else
-        printf 'skip  RFC 3161 tests (no openssl with a ts command)\n'
+        printf 'skip  RFC 3161 tests (%s)\n' \
+            "${TSA_SKIP_REASON:-local TSA fixture could not be built}"
     fi
 
     printf '\n'

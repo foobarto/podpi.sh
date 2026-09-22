@@ -11,6 +11,24 @@ inside `manifest.txt`. Manifests written by older versions must keep verifying.
 
 ## [Unreleased]
 
+### Fixed
+
+- `--self-test` no longer aborts silently when the throwaway RFC 3161 test
+  authority cannot be built. The OpenSSL calls that construct the fixture were
+  unguarded, so under `set -e` any one of them failing killed the whole suite
+  with exit 1 and no output at all — observed on the macOS 15 CI runner. Fixture
+  construction now runs through guarded helpers and degrades to a visible
+  `skip RFC 3161 tests (<reason>)`, since failing to build a test fixture is not
+  a defect in the tool under test.
+- `--self-test` now prints the OpenSSL path and version in its header, so a skip
+  can be diagnosed from the output alone.
+
+### Changed
+
+- CI: replaced the retired `macos-13` runner with `macos-15`. The label still
+  resolved but no runner ever claimed the job, leaving every run permanently
+  queued.
+
 ## [1.0.0] - 2026-09-21
 
 ### Added
